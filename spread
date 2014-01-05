@@ -26,7 +26,18 @@ import logging
 import sys
 import traceback
 
-import colorama
+try:
+    import colorama
+except ImportError:
+    class colorama(object):
+				@staticmethod
+        def init():
+            pass
+				@staticmethod
+        def deinit():
+            pass
+    class Fore(object):
+        RED = ''
 
 import spreads.cli as cli
 from spreads.vendor.confit import ConfigError

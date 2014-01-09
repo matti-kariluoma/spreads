@@ -31,7 +31,6 @@ import os
 import sys
 import time
 
-import colorama
 import pkg_resources
 import spreads.vendor.confit as confit
 
@@ -61,6 +60,22 @@ except ImportError:
         finally:
             termios.tcsetattr(fd, termios.TCSADRAIN, old)
 
+try:
+    import colorama
+except ImportError:
+    class colorama(object):
+        @staticmethod
+        def init():
+            pass
+        @staticmethod
+        def deinit():
+            pass
+    class Fore(object):
+        RED = ''
+        GREEN = ''
+        BLUE = ''
+        RESET = ''
+        
 
 def colorize(text, color):
     return color + text + colorama.Fore.RESET

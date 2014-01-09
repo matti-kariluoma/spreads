@@ -30,10 +30,10 @@ try:
     import colorama
 except ImportError:
     class colorama(object):
-				@staticmethod
+        @staticmethod
         def init():
             pass
-				@staticmethod
+        @staticmethod
         def deinit():
             pass
     class Fore(object):

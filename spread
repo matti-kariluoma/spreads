@@ -38,6 +38,22 @@ except ImportError:
             pass
     class Fore(object):
         RED = ''
+        GREEN = ''
+        BLUE = ''
+        CYAN = ''
+        YELLOW = ''
+        WHITE = ''
+        RESET = ''
+    class Back(object):
+        RED = ''
+        GREEN = ''
+        BLUE = ''
+        CYAN = ''
+        YELLOW = ''
+        WHITE = ''
+        RESET = ''
+    class Style(object):
+        RESET_ALL = ''
 
 import spreads.cli as cli
 from spreads.vendor.confit import ConfigError

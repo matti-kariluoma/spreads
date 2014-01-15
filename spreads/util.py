@@ -29,7 +29,34 @@ import itertools
 import os
 from logging import StreamHandler
 
-from colorama import Fore, Back, Style
+try:
+    import colorama
+except ImportError:
+    class colorama(object):
+        @staticmethod
+        def init():
+            pass
+        @staticmethod
+        def deinit():
+            pass
+    class Fore(object):
+        RED = ''
+        GREEN = ''
+        BLUE = ''
+        CYAN = ''
+        YELLOW = ''
+        WHITE = ''
+        RESET = ''
+    class Back(object):
+        RED = ''
+        GREEN = ''
+        BLUE = ''
+        CYAN = ''
+        YELLOW = ''
+        WHITE = ''
+        RESET = ''
+    class Style(object):
+        RESET_ALL = ''
 
 
 class SpreadsException(Exception):
@@ -116,13 +143,13 @@ class ColourStreamHandler(StreamHandler):
 
     # Some basic colour scheme defaults
     colours = {
-        'DEBUG': Fore.CYAN,
-        'INFO': Fore.GREEN,
-        'WARN': Fore.YELLOW,
-        'WARNING': Fore.YELLOW,
-        'ERROR': Fore.RED,
-        'CRIT': Back.RED + Fore.WHITE,
-        'CRITICAL': Back.RED + Fore.WHITE
+        'DEBUG': colorama.Fore.CYAN,
+        'INFO': colorama.Fore.GREEN,
+        'WARN': colorama.Fore.YELLOW,
+        'WARNING': colorama.Fore.YELLOW,
+        'ERROR': colorama.Fore.RED,
+        'CRIT': colorama.Back.RED + colorama.Fore.WHITE,
+        'CRITICAL': colorama.Back.RED + colorama.Fore.WHITE
     }
 
     @property
@@ -145,7 +172,7 @@ class ColourStreamHandler(StreamHandler):
                 self.stream.write(message)
             else:
                 self.stream.write(self.colours[record.levelname]
-                                  + message + Style.RESET_ALL)
+                                  + message + colorama.Style.RESET_ALL)
             self.stream.write(getattr(self, 'terminator', '\n'))
             self.flush()
         except (KeyboardInterrupt, SystemExit):

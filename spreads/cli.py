@@ -74,7 +74,20 @@ except ImportError:
         RED = ''
         GREEN = ''
         BLUE = ''
+        CYAN = ''
+        YELLOW = ''
+        WHITE = ''
         RESET = ''
+    class Back(object):
+        RED = ''
+        GREEN = ''
+        BLUE = ''
+        CYAN = ''
+        YELLOW = ''
+        WHITE = ''
+        RESET = ''
+    class Style(object):
+        RESET_ALL = ''
         
 
 def colorize(text, color):

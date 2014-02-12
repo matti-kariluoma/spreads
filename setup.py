@@ -81,7 +81,6 @@ setup(
             "scantailor     =spreadsplug.scantailor:ScanTailorPlugin",
             "pdfbeads       =spreadsplug.pdfbeads:PDFBeadsPlugin",
             "djvubind       =spreadsplug.djvubind:DjvuBindPlugin",
-            "colorcorrect   =spreadsplug.colorcorrect:ColorCorrectionPlugin",
             "tesseract      =spreadsplug.tesseract:TesseractPlugin",
             "gui            =spreadsplug.gui:GuiCommand",
             "web            =spreadsplug.web:WebCommands",

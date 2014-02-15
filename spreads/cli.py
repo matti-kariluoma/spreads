@@ -27,38 +27,37 @@ from __future__ import division, unicode_literals, print_function
 
 import argparse
 import logging
+import logging.handlers
 import os
 import sys
 import time
 
 import pkg_resources
 import spreads.vendor.confit as confit
+from spreads.vendor.pathlib import Path
 
+import spreads.plugin as plugin
 from spreads.workflow import Workflow
-from spreads.plugin import (get_driver, get_devices, get_pluginmanager,
-                            setup_plugin_config, get_relevant_extensions,
-                            DeviceFeatures)
-from spreads.util import DeviceException, ColourStreamHandler
+from spreads.util import (DeviceException, ColourStreamHandler,
+                          add_argument_from_option)
 
-# Kudos to http://stackoverflow.com/a/1394994/487903
-try:
-    from msvcrt import getch
-except ImportError:
+if sys.platform == 'win32':
+    import msvcrt
+    getch = msvcrt.getch()
+else:
+    import termios
+    import tty
+
     def getch():
-        """ Wait for keypress on stdin.
-
-        :returns: unicode -- Value of character that was pressed
-
-        """
-        import tty
-        import termios
         fd = sys.stdin.fileno()
         old = termios.tcgetattr(fd)
+        char = None
         try:
             tty.setraw(fd)
-            return sys.stdin.read(1)
+            char = sys.stdin.read(1)
         finally:
             termios.tcsetattr(fd, termios.TCSADRAIN, old)
+        return char
 
 try:
     import colorama
@@ -140,8 +139,11 @@ def _select_plugins(selected_plugins=None):
 
 
 def _setup_processing_pipeline(config):
-    pm = get_pluginmanager(config)
-    extensions = [ext.name for ext in get_relevant_extensions(pm, ['process'])]
+    pm = plugin.get_pluginmanager(config)
+    extensions = [ext.name
+                  for ext in plugin.get_relevant_extensions(pm, ['process'])]
+    if not extensions:
+        return
     print("The following postprocessing plugins were detected:")
     print("\n".join(" - {0}".format(ext) for ext in extensions))
     while True:
@@ -162,7 +164,7 @@ def _set_device_target_page(config, target_page):
           .format(target_page))
     print("Press any key when ready.")
     getch()
-    devs = get_devices(config)
+    devs = plugin.get_devices(config)
     if len(devs) > 1:
         raise DeviceException("Please ensure that only one device is"
                               " turned on!")
@@ -180,17 +182,17 @@ def configure(config):
     config["driver"] = _select_driver()
     config["plugins"] = _select_plugins(config["plugins"].get())
 
-    setup_plugin_config(config)
+    # Set default plugin configuration
+    plugin.set_default_config(config)
     _setup_processing_pipeline(config)
 
     cfg_path = os.path.join(config.config_dir(), confit.CONFIG_FILENAME)
-    setup_plugin_config(config)
 
-    driver = get_driver(config["driver"].get()).driver
+    driver = plugin.get_driver(config["driver"].get()).driver
 
     # We only need to set the device target_page if the driver supports
     # shooting with two devices
-    if DeviceFeatures.IS_CAMERA in driver.features:
+    if plugin.DeviceFeatures.IS_CAMERA in driver.features:
         answer = raw_input(
             "Do you want to configure the target_page of your devices?\n"
             "(Required for shooting with two devices) [y/n]: ")
@@ -207,7 +209,7 @@ def configure(config):
             print("Please turn on one of your capture devices.\n"
                   "Press any key to continue")
             getch()
-            devs = get_devices(config)
+            devs = plugin.get_devices(config)
             print("Please put a book with as little whitespace as possible"
                   "under your cameras.\nPress any button to continue")
             getch()
@@ -220,6 +222,51 @@ def configure(config):
 def capture(config):
     path = config['path'].get()
     workflow = Workflow(config=config, path=path)
+    capture_keys = workflow.config['capture']['capture_keys'].as_str_seq()
+
+    # Some closures
+    def refresh_stats():
+        # Callback to print statistics
+        pages_per_hour = (3600/(time.time() -
+                          workflow.capture_start))*workflow.pages_shot
+        status = ("\rShot {0: >3} pages [{1: >4.0f}/h] "
+                  .format(unicode(workflow.pages_shot), pages_per_hour))
+        sys.stdout.write(status)
+        sys.stdout.flush()
+
+    def trigger_loop():
+        is_posix = sys.platform != 'win32'
+        old_count = workflow.pages_shot
+        if is_posix:
+            import select
+            old_settings = termios.tcgetattr(sys.stdin)
+            data_available = lambda: (select.select([sys.stdin], [], [], 0) ==
+                                     ([sys.stdin], [], []))
+            read_char = lambda: sys.stdin.read(1)
+        else:
+            data_available = msvcrt.kbhit
+            read_char = msvcrt.getch
+
+        try:
+            if is_posix:
+                tty.setcbreak(sys.stdin.fileno())
+            while True:
+                time.sleep(0.01)
+                if workflow.pages_shot != old_count:
+                    old_count = workflow.pages_shot
+                    refresh_stats()
+                if not data_available():
+                    continue
+                char = read_char()
+                if char in tuple(capture_keys) + ('r', ):
+                    workflow.capture(retake=(char == 'r'))
+                    refresh_stats()
+                elif char == 'f':
+                    break
+        finally:
+            if is_posix:
+                termios.tcsetattr(sys.stdin, termios.TCSADRAIN, old_settings)
+
     if len(workflow.devices) != 2:
         raise DeviceException("Please connect and turn on two"
                               " pre-configured devices! ({0} were"
@@ -233,38 +280,15 @@ def capture(config):
     # Set up for capturing
     print("Setting up devices for capturing.")
     workflow.prepare_capture()
-    # Start capture loop
-    shot_count = 0
-    pages_per_hour = 0
-    capture_keys = workflow.config['capture']['capture_keys'].as_str_seq()
+
     print("({0}) capture | (r) retake last shot | (f) finish "
           .format("/".join(capture_keys)))
-    while True:
-        retake = False
-        char = getch().lower()
-        if char == 'f':
-            break
-        elif char == 'r':
-            retake = True
-        elif char not in capture_keys:
-            continue
-        workflow.capture(retake=retake)
-        shot_count += len(workflow.devices)
-        pages_per_hour = (3600/(time.time() -
-                          workflow.capture_start))*shot_count
-        status = ("\rShot {0: >3} pages [{1: >4.0f}/h] "
-                  .format(unicode(shot_count), pages_per_hour))
-        sys.stdout.write(status)
-        sys.stdout.flush()
+    # Start trigger loop
+    trigger_loop()
+
     workflow.finish_capture()
     if workflow.capture_start is None:
         return
-    sys.stdout.write("\rShot {0} pages in {1:.1f} minutes, average speed was"
-                     " {2:.0f} pages per hour\n"
-                     .format(colorize(str(shot_count), colorama.Fore.GREEN),
-                             (time.time() - workflow.capture_start)/60,
-                             pages_per_hour))
-    sys.stdout.flush()
 
 
 def postprocess(config):
@@ -299,71 +323,46 @@ def wizard(config):
 
 
 def setup_parser(config):
-    def _add_argument_from_option(extname, key, option, parser):
-        flag = "--{0}".format(key.replace('_', '-'))
-        default = (option.value
-                   if not option.selectable
-                   else option.value[0])
-        kwargs = {'help': ("{0} [default: {1}]"
-                           .format(option.docstring, default)),
-                  'dest': "{0}.{1}".format(extname, key)}
-        if isinstance(option.value, basestring):
-            kwargs['type'] = unicode
-            kwargs['metavar'] = "<str>"
-        elif isinstance(option.value, bool):
-            kwargs['help'] = option.docstring
-            if option.value:
-                flag = "--no-{0}".format(key.replace('_', '-'))
-                kwargs['help'] = ("Disable {0}"
-                                  .format(option.docstring.lower()))
-                kwargs['action'] = "store_false"
-            else:
-                kwargs['action'] = "store_true"
-        elif isinstance(option.value, float):
-            kwargs['type'] = float
-            kwargs['metavar'] = "<float>"
-        elif isinstance(option.value, int):
-            kwargs['type'] = int
-            kwargs['metavar'] = "<int>"
-        elif option.selectable:
-            kwargs['type'] = type(option.value[0])
-            kwargs['metavar'] = "<{0}>".format("/".join(option.value))
-            kwargs['choices'] = option.value
-        else:
-            raise TypeError("Unsupported option type")
-        parser.add_argument(flag, **kwargs)
-
     def _add_device_arguments(name, parser):
-        tmpl = get_driver(config["driver"]
-                          .get()).driver.configuration_template()
+        tmpl = plugin.get_driver(config["driver"]
+                                 .get()).driver.configuration_template()
         if not tmpl:
             return
         for key, option in tmpl.iteritems():
             try:
-                _add_argument_from_option('device', key, option, parser)
+                add_argument_from_option('device', key, option, parser)
             except:
                 return
 
     def _add_plugin_arguments(hooks, parser):
-        extensions = get_relevant_extensions(pluginmanager, hooks)
+        extensions = plugin.get_relevant_extensions(pluginmanager, hooks)
         for ext in extensions:
             tmpl = ext.plugin.configuration_template()
             if not tmpl:
                 continue
             for key, option in tmpl.iteritems():
                 try:
-                    _add_argument_from_option(ext.name, key, option, parser)
+                    add_argument_from_option(ext.name, key, option, parser)
                 except:
                     continue
 
-    pluginmanager = get_pluginmanager(config)
+    root_options = {
+        'verbose': plugin.PluginOption(value=False,
+                                       docstring="Enable verbose output"),
+        'logfile': plugin.PluginOption(value="~/.config/spreads/spreads.log",
+                                       docstring="Path to logfile"),
+        'loglevel': plugin.PluginOption(value=['info', 'critical', 'error',
+                                               'warning', 'debug'],
+                                        docstring="Logging level for logfile",
+                                        selectable=True)
+    }
+
+    pluginmanager = plugin.get_pluginmanager(config)
     rootparser = argparse.ArgumentParser(
         description="Scanning Tool for  DIY Book Scanner")
     subparsers = rootparser.add_subparsers()
-
-    rootparser.add_argument(
-        '--verbose', '-v', dest="loglevel", action="store_const",
-        const="debug")
+    for key, option in root_options.iteritems():
+        add_argument_from_option('', key, option, rootparser)
 
     wizard_parser = subparsers.add_parser(
         'wizard', help="Interactive mode")
@@ -382,7 +381,8 @@ def setup_parser(config):
     capture_parser.set_defaults(subcommand=capture)
     # Add arguments from plugins
     for parser in (capture_parser, wizard_parser):
-        _add_plugin_arguments(['prepare_capture', 'capture', 'finish_capture'],
+        _add_plugin_arguments(['prepare_capture', 'capture', 'finish_capture',
+                               'start_trigger_loop'],
                               parser)
         if 'driver' in config.keys():
             _add_device_arguments('capture', parser)
@@ -434,8 +434,10 @@ def main():
 
     # Lazy-load configuration
     config = confit.LazyConfig('spreads', __name__)
+    # Load default plugin configuration
+    plugin.set_default_config(config)
+    # Load user configuration
     config.read()
-    setup_plugin_config(config)
 
     parser = setup_parser(config)
     args = parser.parse_args()
@@ -450,16 +452,26 @@ def main():
         'error':    logging.ERROR,
         'critical': logging.CRITICAL,
     })
+    logfile = Path(os.path.expanduser(config['logfile'].get()))
+    if not logfile.parent.exists():
+        logfile.parent.mkdir()
 
     # Set up logger
     logger = logging.getLogger()
     if logger.handlers:
         for handler in logger.handlers:
             logger.removeHandler(handler)
-    handler = ColourStreamHandler()
-    handler.setLevel(loglevel)
-    handler.setFormatter(logging.Formatter("%(name)s: %(message)s"))
-    logger.addHandler(handler)
-    logger.setLevel(logging.INFO)
+    stdout_handler = ColourStreamHandler()
+    stdout_handler.setLevel(logging.DEBUG if config['verbose'].get()
+                            else logging.WARNING)
+    stdout_handler.setFormatter(logging.Formatter("%(name)s: %(message)s"))
+    file_handler = logging.handlers.RotatingFileHandler(
+        filename=unicode(logfile), maxBytes=512*1024, backupCount=1)
+    file_handler.setFormatter(logging.Formatter(
+        "%(asctime)s %(message)s [%(name)s] [%(levelname)s]"))
+    file_handler.setLevel(loglevel)
+    logger.addHandler(stdout_handler)
+    logger.addHandler(file_handler)
+    logger.setLevel(logging.DEBUG)
 
     args.subcommand(config)
